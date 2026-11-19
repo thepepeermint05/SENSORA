@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Check, Copy, GitBranch, Package, Smartphone } from 'lucide-react';
-import { apiUrl } from '../lib/api';
+import { apiUrl, isLocalToken } from '../lib/api';
+import { localGetDeployment, localSaveDeployment } from '../lib/localStore';
 import { DeploymentConfig } from '../types/sensor';
 import { PWAInstallButton } from './PWAInstallButton';
 
@@ -22,6 +23,12 @@ export const DeploymentView: React.FC<DeploymentViewProps> = ({ token }) => {
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   useEffect(() => {
+    if (isLocalToken(token)) {
+      localGetDeployment(token)
+        .then((cfg) => setConfig(cfg))
+        .catch(() => {});
+      return;
+    }
     fetch(apiUrl('/api/deployment/config'), {
       headers: { Authorization: `Bearer ${token}` },
     })
@@ -38,6 +45,12 @@ export const DeploymentView: React.FC<DeploymentViewProps> = ({ token }) => {
     setSaving(true);
     setSavedMsg(null);
     try {
+      if (isLocalToken(token)) {
+        const updated = await localSaveDeployment(token, config);
+        setConfig(updated);
+        setSavedMsg('Repository deployment configuration saved on device.');
+        return;
+      }
       const res = await fetch(apiUrl('/api/deployment/config'), {
         method: 'PUT',
         headers: {

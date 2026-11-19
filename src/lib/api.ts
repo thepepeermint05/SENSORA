@@ -1,6 +1,5 @@
 const DEFAULT_CLOUD_SERVER =
-  import.meta.env.VITE_API_BASE_URL ||
-  'https://ais-pre-rogbxvrumm6szdnkiely6c-95350709883.asia-northeast1.run.app';
+  import.meta.env.VITE_API_BASE_URL || '';
 
 const memoryStore = new Map<string, string>();
 
@@ -43,7 +42,7 @@ export function getApiBaseUrl(): string {
   if (override && override.startsWith('http')) {
     return override.replace(/\/$/, '');
   }
-  if (isCapacitorNative()) {
+  if (isCapacitorNative() && DEFAULT_CLOUD_SERVER) {
     return DEFAULT_CLOUD_SERVER.replace(/\/$/, '');
   }
   return '';
@@ -56,6 +55,27 @@ export function setApiBaseUrl(url: string): void {
   } else {
     safeStorage.removeItem('sensora_api_base');
   }
+}
+
+export async function isRemoteServerAvailable(): Promise<boolean> {
+  if (!isCapacitorNative()) return true;
+  const base = getApiBaseUrl();
+  if (!base) return false;
+  try {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 2500);
+    const res = await fetch(`${base}/api/health`, { signal: controller.signal });
+    window.clearTimeout(timer);
+    if (!res.ok) return false;
+    const json = (await res.json()) as { ok?: boolean; service?: string };
+    return Boolean(json.ok && json.service === 'sensora');
+  } catch {
+    return false;
+  }
+}
+
+export function isLocalToken(token: string | null): boolean {
+  return Boolean(token && token.startsWith('local_'));
 }
 
 export function apiUrl(path: string): string {

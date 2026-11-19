@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { apiUrl, wsUrl } from '../lib/api';
+import { apiUrl, isLocalToken, wsUrl } from '../lib/api';
+import { localSaveReadings } from '../lib/localStore';
 import { LiveSensorSample, PermissionState } from '../types/sensor';
 
 interface WindowWithSensors extends Window {
@@ -68,9 +69,9 @@ export function useSensorStream(token: string | null) {
       : 'web-client'
   );
 
-  // Connect WebSocket for real-time telemetry ingestion
+  // Connect WebSocket for real-time telemetry ingestion (server sessions only)
   useEffect(() => {
-    if (!token) return;
+    if (!token || isLocalToken(token)) return;
     let closed = false;
     let reconnectTimer: number | undefined;
 
@@ -137,6 +138,12 @@ export function useSensorStream(token: string | null) {
         metrics: sample.metrics,
         recordedAt: sample.recordedAt,
       };
+
+      if (isLocalToken(token)) {
+        await localSaveReadings(token, [payload]);
+        setSavedCount((c) => c + 1);
+        return;
+      }
 
       if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
         wsRef.current.send(JSON.stringify({ type: 'sensor:reading', payload }));

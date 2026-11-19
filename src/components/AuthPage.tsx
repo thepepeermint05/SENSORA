@@ -1,13 +1,20 @@
 import React, { useState } from 'react';
-import { Eye, EyeOff, Globe, KeyRound, Lock, Mail, User } from 'lucide-react';
+import { ExternalLink, Eye, EyeOff, Globe, KeyRound, Lock, Mail, User } from 'lucide-react';
 import {
   apiUrl,
   getApiBaseUrl,
   isCapacitorNative,
+  isRemoteServerAvailable,
   parseApiResponse,
   setApiBaseUrl,
 } from '../lib/api';
 import { signInWithGooglePopup } from '../lib/firebaseAuth';
+import {
+  localForgotPassword,
+  localLogin,
+  localRegister,
+  localResetPassword,
+} from '../lib/localStore';
 import { AuthUser } from '../types/sensor';
 
 type AuthMode = 'login' | 'register' | 'forgot';
@@ -16,6 +23,9 @@ type ForgotStep = 'email' | 'verify' | 'done';
 interface AuthPageProps {
   onAuthenticated: (token: string, user: AuthUser) => void;
 }
+
+const WEB_APP_URL =
+  'https://ais-dev-rogbxvrumm6szdnkiely6c-95350709883.asia-northeast1.run.app';
 
 export const AuthPage: React.FC<AuthPageProps> = ({ onAuthenticated }) => {
   const [mode, setMode] = useState<AuthMode>('login');
@@ -37,16 +47,18 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthenticated }) => {
   const [googleLoading, setGoogleLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+  const [showWebFallbackLink, setShowWebFallbackLink] = useState(false);
 
-  const [showServerConfig, setShowServerConfig] = useState(() => isCapacitorNative());
+  const isNative = isCapacitorNative();
+  const [showServerConfig, setShowServerConfig] = useState(false);
   const [serverInput, setServerInput] = useState(() => getApiBaseUrl());
 
   const saveServerEndpoint = () => {
     setApiBaseUrl(serverInput);
     setInfo(
       serverInput.trim()
-        ? `Backend endpoint set to ${serverInput.trim()}`
-        : 'Backend endpoint reset to default.'
+        ? `Cloud Server set to ${serverInput.trim()}`
+        : 'Using standalone on-device storage.'
     );
     setError(null);
   };
@@ -57,6 +69,13 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthenticated }) => {
     setInfo(null);
     setLoading(true);
     try {
+      const useRemote = await isRemoteServerAvailable();
+      if (!useRemote) {
+        const res = await localLogin({ identifier, password });
+        onAuthenticated(res.token, res.user);
+        return;
+      }
+
       const res = await fetch(apiUrl('/api/auth/login'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -71,11 +90,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthenticated }) => {
       }
       onAuthenticated(data.token, data.user);
     } catch (err) {
-      setError(
-        err instanceof Error
-          ? `Cannot reach server (${err.message}). Check your internet or Cloud Server URL.`
-          : 'Network error while signing in.'
-      );
+      setError(err instanceof Error ? err.message : 'Unable to sign in.');
     } finally {
       setLoading(false);
     }
@@ -87,6 +102,13 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthenticated }) => {
     setInfo(null);
     setLoading(true);
     try {
+      const useRemote = await isRemoteServerAvailable();
+      if (!useRemote) {
+        const res = await localRegister({ username, email, displayName, password });
+        onAuthenticated(res.token, res.user);
+        return;
+      }
+
       const res = await fetch(apiUrl('/api/auth/register'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -101,11 +123,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthenticated }) => {
       }
       onAuthenticated(data.token, data.user);
     } catch (err) {
-      setError(
-        err instanceof Error
-          ? `Cannot reach server (${err.message}). Check your internet or Cloud Server URL.`
-          : 'Network error while creating account.'
-      );
+      setError(err instanceof Error ? err.message : 'Unable to create account.');
     } finally {
       setLoading(false);
     }
@@ -117,6 +135,15 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthenticated }) => {
     setInfo(null);
     setLoading(true);
     try {
+      const useRemote = await isRemoteServerAvailable();
+      if (!useRemote) {
+        const data = await localForgotPassword(resetEmail);
+        setPreviewCode(data.previewCode);
+        setInfo(data.message);
+        setForgotStep('verify');
+        return;
+      }
+
       const res = await fetch(apiUrl('/api/auth/forgot-password'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -134,8 +161,8 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthenticated }) => {
       setPreviewCode(data?.previewCode || null);
       setInfo(data?.message || 'Verification code generated.');
       setForgotStep('verify');
-    } catch {
-      setError('Network error while requesting recovery code.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to request recovery code.');
     } finally {
       setLoading(false);
     }
@@ -146,6 +173,19 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthenticated }) => {
     setError(null);
     setLoading(true);
     try {
+      const useRemote = await isRemoteServerAvailable();
+      if (!useRemote) {
+        const data = await localResetPassword({
+          email: resetEmail,
+          code: resetCode,
+          newPassword,
+        });
+        setForgotStep('done');
+        setInfo(data.message);
+        setPreviewCode(null);
+        return;
+      }
+
       const res = await fetch(apiUrl('/api/auth/reset-password'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -163,8 +203,8 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthenticated }) => {
       setForgotStep('done');
       setInfo(data?.message || 'Password updated successfully.');
       setPreviewCode(null);
-    } catch {
-      setError('Network error while resetting password.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to reset password.');
     } finally {
       setLoading(false);
     }
@@ -173,6 +213,16 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthenticated }) => {
   const handleGoogleSignIn = async () => {
     setError(null);
     setInfo(null);
+    setShowWebFallbackLink(false);
+
+    if (isNative) {
+      setShowWebFallbackLink(true);
+      setError(
+        'Google OAuth popups cannot run inside an Android APK WebView (auth/unauthorized-domain). Create or sign in with your email and password above on the APK, or open Sensora in Chrome for Google Sign-In.'
+      );
+      return;
+    }
+
     setGoogleLoading(true);
     try {
       const { idToken } = await signInWithGooglePopup();
@@ -191,7 +241,12 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthenticated }) => {
       onAuthenticated(data.token, data.user);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes('popup-closed-by-user')) {
+      if (msg.includes('auth/unauthorized-domain')) {
+        setShowWebFallbackLink(true);
+        setError(
+          `Domain "${window.location.hostname}" is not authorized for Google Sign-In popups. Use Email & Password above or open the authorized web URL in Chrome.`
+        );
+      } else if (msg.includes('popup-closed-by-user')) {
         setError('Google sign-in popup was closed before completing.');
       } else if (msg.includes('popup-blocked')) {
         setError('Popup was blocked. Allow popups in your browser and try again.');
@@ -207,7 +262,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthenticated }) => {
     <div className="min-h-screen bg-slate-50 text-slate-900">
       <div className="mx-auto grid min-h-screen max-w-6xl grid-cols-1 items-stretch lg:grid-cols-12">
         {/* Left Telemetry Summary Column */}
-        <div className="flex flex-col justify-between border-b border-slate-200 bg-white px-6 py-10 lg:col-span-6 lg:border-r lg:border-b-0 lg:px-12 lg:py-16">
+        <div className="hidden flex-col justify-between border-b border-slate-200 bg-white px-6 py-10 lg:col-span-6 lg:flex lg:border-r lg:border-b-0 lg:px-12 lg:py-16">
           <div>
             <div className="flex items-center gap-3">
               <img
@@ -237,15 +292,25 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthenticated }) => {
             <div>
               <p className="text-xs font-medium text-slate-500">Storage Separation</p>
               <p className="mt-1 font-mono text-2xl font-semibold text-slate-900 tabular-nums">2-Tier</p>
-              <p className="mt-1 text-xs text-slate-500">SQLite Telemetry &middot; Media Vault</p>
+              <p className="mt-1 text-xs text-slate-500">Telemetry DB &middot; Media Vault</p>
             </div>
           </div>
         </div>
 
         {/* Right Authentication Form Column */}
-        <div className="flex flex-col justify-center px-6 py-10 sm:px-10 lg:col-span-6 lg:px-14">
+        <div className="flex flex-col justify-center px-5 py-8 sm:px-10 lg:col-span-6 lg:px-14">
           <div className="mx-auto w-full max-w-md">
-            <div className="mb-6 flex items-center gap-1 rounded-xl border border-slate-200 bg-white p-1">
+            <div className="mb-6 flex items-center gap-3 lg:hidden">
+              <img
+                src="/icon.svg"
+                alt="Sensora mark"
+                className="h-8 w-8 rounded-lg"
+                referrerPolicy="no-referrer"
+              />
+              <span className="text-lg font-bold tracking-tight text-slate-900">Sensora</span>
+            </div>
+
+            <div className="mb-5 flex items-center gap-1 rounded-xl border border-slate-200 bg-white p-1">
               <button
                 type="button"
                 onClick={() => {
@@ -298,9 +363,20 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthenticated }) => {
               {error && (
                 <div
                   role="alert"
-                  className="mb-5 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs font-medium text-rose-800"
+                  className="mb-5 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs leading-relaxed font-medium text-rose-800"
                 >
-                  {error}
+                  <p>{error}</p>
+                  {showWebFallbackLink && (
+                    <a
+                      href={WEB_APP_URL}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="mt-2 inline-flex items-center gap-1.5 font-semibold text-sky-700 underline"
+                    >
+                      <span>Open Web App in Chrome</span>
+                      <ExternalLink className="h-3.5 w-3.5" />
+                    </a>
+                  )}
                 </div>
               )}
 
@@ -318,7 +394,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthenticated }) => {
                   <div>
                     <h2 className="text-lg font-semibold text-slate-900">Sign in to Sensora</h2>
                     <p className="mt-1 text-xs text-slate-500">
-                      Access your live device telemetry and cloud sensor archive.
+                      Access your live device telemetry and sensor archive.
                     </p>
                   </div>
 
@@ -396,7 +472,9 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthenticated }) => {
                   <div>
                     <h2 className="text-lg font-semibold text-slate-900">Create operator account</h2>
                     <p className="mt-1 text-xs text-slate-500">
-                      Passwords are salted and hashed with scrypt before persistence in SQLite.
+                      {isNative
+                        ? 'Works directly on your device or syncs when a Cloud Server URL is connected.'
+                        : 'Passwords are salted and hashed before persistence in SQLite.'}
                     </p>
                   </div>
 
@@ -624,36 +702,47 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthenticated }) => {
                 {googleLoading ? 'Connecting with Google...' : 'Sign in with Google'}
               </button>
 
-              {/* Optional Cloud Server Endpoint Toggle (helpful in Android APK builds) */}
-              <div className="mt-5 border-t border-slate-100 pt-4">
-                <button
-                  type="button"
-                  onClick={() => setShowServerConfig((s) => !s)}
-                  className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-slate-800"
-                >
-                  <Globe className="h-3.5 w-3.5" />
-                  <span>{showServerConfig ? 'Hide Cloud Server URL' : 'Cloud Server Connection'}</span>
-                </button>
+              {isNative && (
+                <div className="mt-5 border-t border-slate-100 pt-4">
+                  <button
+                    type="button"
+                    onClick={() => setShowServerConfig((s) => !s)}
+                    className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-slate-800"
+                  >
+                    <Globe className="h-3.5 w-3.5" />
+                    <span>
+                      {showServerConfig
+                        ? 'Hide Optional Cloud Server URL'
+                        : 'Optional: Connect Remote Cloud Server'}
+                    </span>
+                  </button>
 
-                {showServerConfig && (
-                  <div className="mt-2.5 flex items-center gap-2">
-                    <input
-                      type="url"
-                      value={serverInput}
-                      onChange={(e) => setServerInput(e.target.value)}
-                      placeholder="https://your-server.run.app"
-                      className="min-h-[40px] flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 font-mono text-xs text-slate-800 outline-none focus:border-sky-600 focus:bg-white"
-                    />
-                    <button
-                      type="button"
-                      onClick={saveServerEndpoint}
-                      className="min-h-[40px] rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-800 hover:bg-slate-50"
-                    >
-                      Save
-                    </button>
-                  </div>
-                )}
-              </div>
+                  {showServerConfig && (
+                    <div className="mt-2.5 space-y-2">
+                      <p className="text-[11px] text-slate-500">
+                        Leave blank to store accounts and sensor telemetry directly on your device
+                        (IndexedDB), or enter your deployed server URL.
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="url"
+                          value={serverInput}
+                          onChange={(e) => setServerInput(e.target.value)}
+                          placeholder="https://your-sensora-server.run.app"
+                          className="min-h-[40px] flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 font-mono text-xs text-slate-800 outline-none focus:border-sky-600 focus:bg-white"
+                        />
+                        <button
+                          type="button"
+                          onClick={saveServerEndpoint}
+                          className="min-h-[40px] rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-800 hover:bg-slate-50"
+                        >
+                          Save
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         </div>

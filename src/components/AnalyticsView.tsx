@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Download } from 'lucide-react';
-import { apiUrl } from '../lib/api';
+import { apiUrl, isLocalToken } from '../lib/api';
+import { localGetReadings } from '../lib/localStore';
 import { SENSOR_CATALOG } from '../sensors/sensorCatalog';
 import { SensorStats, StoredSensorReading } from '../types/sensor';
 
@@ -32,14 +33,24 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({ token, refreshSign
   const loadHistory = useCallback(async () => {
     setLoading(true);
     try {
+      let fromIso: string | undefined;
+      if (range !== 'all') {
+        const ms =
+          range === '15m' ? 15 * 60_000 : range === '1h' ? 60 * 60_000 : 24 * 60 * 60_000;
+        fromIso = new Date(Date.now() - ms).toISOString();
+      }
+      if (isLocalToken(token)) {
+        const data = await localGetReadings(token, selectedSensor, fromIso);
+        setReadings(data.readings);
+        setStats(data.stats);
+        return;
+      }
       const params = new URLSearchParams({
         sensorId: selectedSensor,
         limit: '250',
       });
-      if (range !== 'all') {
-        const ms =
-          range === '15m' ? 15 * 60_000 : range === '1h' ? 60 * 60_000 : 24 * 60 * 60_000;
-        params.set('from', new Date(Date.now() - ms).toISOString());
+      if (fromIso) {
+        params.set('from', fromIso);
       }
       const res = await fetch(apiUrl(`/api/sensors/readings?${params.toString()}`), {
         headers: { Authorization: `Bearer ${token}` },
@@ -99,6 +110,37 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({ token, refreshSign
   const exportUrl = (format: 'csv' | 'json') =>
     apiUrl(`/api/sensors/export?sensorId=${encodeURIComponent(selectedSensor)}&format=${format}&token=${encodeURIComponent(token)}`);
 
+  const handleLocalExport = (format: 'csv' | 'json') => {
+    const content =
+      format === 'json'
+        ? JSON.stringify(readings, null, 2)
+        : [
+            'id,deviceId,sensorId,primaryValue,unit,metrics,recordedAt',
+            ...readings.map((r) =>
+              [
+                r.id,
+                r.deviceId,
+                r.sensorId,
+                r.primaryValue ?? '',
+                r.unit,
+                `"${JSON.stringify(r.metrics).replace(/"/g, '""')}"`,
+                r.recordedAt,
+              ].join(',')
+            ),
+          ].join('\n');
+    const blob = new Blob([content], {
+      type: format === 'json' ? 'application/json' : 'text/csv;charset=utf-8;',
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `sensora-${selectedSensor}-${new Date().toISOString().slice(0, 10)}.${format}`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col justify-between gap-4 border-b border-slate-200 pb-6 lg:flex-row lg:items-end">
@@ -107,25 +149,48 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({ token, refreshSign
             Historical Telemetry &amp; Analytics
           </h1>
           <p className="mt-1 text-sm text-slate-600">
-            Long-term SQLite cloud time-series review across all numeric hardware sensors.
+            Long-term time-series review across all numeric hardware sensors.
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5">
-          <a
-            href={exportUrl('csv')}
-            className="inline-flex min-h-[44px] items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-800 hover:bg-slate-50 whitespace-nowrap"
-          >
-            <Download className="h-4 w-4" />
-            Export CSV
-          </a>
-          <a
-            href={exportUrl('json')}
-            className="inline-flex min-h-[44px] items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-800 hover:bg-slate-50 whitespace-nowrap"
-          >
-            <Download className="h-4 w-4" />
-            Export JSON
-          </a>
+          {isLocalToken(token) ? (
+            <>
+              <button
+                type="button"
+                onClick={() => handleLocalExport('csv')}
+                className="inline-flex min-h-[44px] items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-800 hover:bg-slate-50 whitespace-nowrap"
+              >
+                <Download className="h-4 w-4" />
+                Export CSV
+              </button>
+              <button
+                type="button"
+                onClick={() => handleLocalExport('json')}
+                className="inline-flex min-h-[44px] items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-800 hover:bg-slate-50 whitespace-nowrap"
+              >
+                <Download className="h-4 w-4" />
+                Export JSON
+              </button>
+            </>
+          ) : (
+            <>
+              <a
+                href={exportUrl('csv')}
+                className="inline-flex min-h-[44px] items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-800 hover:bg-slate-50 whitespace-nowrap"
+              >
+                <Download className="h-4 w-4" />
+                Export CSV
+              </a>
+              <a
+                href={exportUrl('json')}
+                className="inline-flex min-h-[44px] items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-800 hover:bg-slate-50 whitespace-nowrap"
+              >
+                <Download className="h-4 w-4" />
+                Export JSON
+              </a>
+            </>
+          )}
         </div>
       </div>
 

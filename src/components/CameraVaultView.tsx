@@ -1,7 +1,10 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Camera, Download, Trash2 } from 'lucide-react';
-import { apiUrl } from '../lib/api';
+import { apiUrl, isLocalToken } from '../lib/api';
+import { localDeleteCapture, localGetCaptures } from '../lib/localStore';
 import { CameraCaptureRecord } from '../types/sensor';
+
+type CaptureViewItem = CameraCaptureRecord & { dataUrl?: string };
 
 interface CameraVaultViewProps {
   token: string;
@@ -14,17 +17,22 @@ export const CameraVaultView: React.FC<CameraVaultViewProps> = ({
   onOpenCameraSensor,
   refreshSignal,
 }) => {
-  const [captures, setCaptures] = useState<CameraCaptureRecord[]>([]);
+  const [captures, setCaptures] = useState<CaptureViewItem[]>([]);
   const [loading, setLoading] = useState(true);
 
   const loadCaptures = useCallback(async () => {
     setLoading(true);
     try {
+      if (isLocalToken(token)) {
+        const localCaps = await localGetCaptures(token);
+        setCaptures(localCaps);
+        return;
+      }
       const res = await fetch(apiUrl('/api/camera/captures'), {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.ok) {
-        const data = (await res.json()) as { captures: CameraCaptureRecord[] };
+        const data = (await res.json()) as { captures: CaptureViewItem[] };
         setCaptures(data.captures);
       }
     } finally {
@@ -37,6 +45,11 @@ export const CameraVaultView: React.FC<CameraVaultViewProps> = ({
   }, [loadCaptures, refreshSignal]);
 
   const handleDelete = async (id: string) => {
+    if (isLocalToken(token)) {
+      await localDeleteCapture(token, id);
+      setCaptures((prev) => prev.filter((c) => c.id !== id));
+      return;
+    }
     const res = await fetch(apiUrl(`/api/camera/captures/${id}`), {
       method: 'DELETE',
       headers: { Authorization: `Bearer ${token}` },
@@ -106,7 +119,9 @@ export const CameraVaultView: React.FC<CameraVaultViewProps> = ({
       ) : (
         <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
           {captures.map((cap) => {
-            const imgUrl = apiUrl(`/api/camera/files/${cap.id}?token=${encodeURIComponent(token)}`);
+            const imgUrl =
+              cap.dataUrl ||
+              apiUrl(`/api/camera/files/${cap.id}?token=${encodeURIComponent(token)}`);
             return (
               <article
                 key={cap.id}

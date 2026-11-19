@@ -23,7 +23,15 @@ import { LiveSensorModal } from './components/LiveSensorModal';
 import { PermissionModal } from './components/PermissionModal';
 import { OfflineIndicator, PWAInstallButton } from './components/PWAInstallButton';
 import { useSensorStream } from './hooks/useSensorStream';
-import { apiUrl, safeStorage } from './lib/api';
+import { apiUrl, isLocalToken, safeStorage } from './lib/api';
+import {
+  localGetMe,
+  localGetPermissions,
+  localGetSummary,
+  localLogout,
+  localSaveCapture,
+  localSetPermission,
+} from './lib/localStore';
 import { CATEGORY_LABELS, SENSOR_CATALOG } from './sensors/sensorCatalog';
 import { AuthUser, PermissionState, SensorDefinition } from './types/sensor';
 
@@ -93,6 +101,19 @@ export default function App() {
       setAuthChecking(false);
       return;
     }
+    if (isLocalToken(token)) {
+      localGetMe(token)
+        .then((authUser) => {
+          setUser(authUser);
+        })
+        .catch(() => {
+          safeStorage.removeItem('sensora_token');
+          setToken(null);
+          setUser(null);
+        })
+        .finally(() => setAuthChecking(false));
+      return;
+    }
     fetch(apiUrl('/api/auth/me'), {
       headers: { Authorization: `Bearer ${token}` },
     })
@@ -112,6 +133,25 @@ export default function App() {
   const loadWorkspaceData = useCallback(async () => {
     if (!token) return;
     try {
+      if (isLocalToken(token)) {
+        const [permMap, sumData] = await Promise.all([
+          localGetPermissions(token),
+          localGetSummary(token),
+        ]);
+        const mapped: Record<string, PermissionState> = {};
+        for (const [k, v] of Object.entries(permMap)) {
+          mapped[k] = v.state;
+        }
+        setPermissions(mapped);
+        const counts: Record<string, number> = {};
+        for (const item of sumData.telemetrySummary) {
+          counts[item.sensor_id] = item.count;
+        }
+        setSummaryCounts(counts);
+        setCameraVaultCount(sumData.cameraVaultSummary.count);
+        return;
+      }
+
       const [permRes, sumRes] = await Promise.all([
         fetch(apiUrl('/api/sensors/permissions'), { headers: { Authorization: `Bearer ${token}` } }),
         fetch(apiUrl('/api/sensors/summary'), { headers: { Authorization: `Bearer ${token}` } }),
@@ -158,10 +198,14 @@ export default function App() {
   const handleLogout = async () => {
     stopActiveSensor();
     if (token) {
-      await fetch(apiUrl('/api/auth/logout'), {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-      }).catch(() => {});
+      if (isLocalToken(token)) {
+        await localLogout(token).catch(() => {});
+      } else {
+        await fetch(apiUrl('/api/auth/logout'), {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+        }).catch(() => {});
+      }
     }
     safeStorage.removeItem('sensora_token');
     setToken(null);
@@ -185,14 +229,18 @@ export default function App() {
     const result = await requestHardwarePermission(sensor.id);
 
     setPermissions((prev) => ({ ...prev, [sensor.id]: result }));
-    await fetch(apiUrl(`/api/sensors/permissions/${sensor.id}`), {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({ state: result }),
-    }).catch(() => {});
+    if (isLocalToken(token)) {
+      await localSetPermission(token, sensor.id, result).catch(() => {});
+    } else {
+      await fetch(apiUrl(`/api/sensors/permissions/${sensor.id}`), {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ state: result }),
+      }).catch(() => {});
+    }
 
     setPendingPermissionSensor(null);
     if (result === 'granted') {
@@ -205,14 +253,18 @@ export default function App() {
     if (!pendingPermissionSensor || !token) return;
     const sensor = pendingPermissionSensor;
     setPermissions((prev) => ({ ...prev, [sensor.id]: 'denied' }));
-    await fetch(apiUrl(`/api/sensors/permissions/${sensor.id}`), {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({ state: 'denied' }),
-    }).catch(() => {});
+    if (isLocalToken(token)) {
+      await localSetPermission(token, sensor.id, 'denied').catch(() => {});
+    } else {
+      await fetch(apiUrl(`/api/sensors/permissions/${sensor.id}`), {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ state: 'denied' }),
+      }).catch(() => {});
+    }
     setPendingPermissionSensor(null);
   };
 
@@ -226,6 +278,11 @@ export default function App() {
     fpsEstimate: number;
   }) => {
     if (!token) return;
+    if (isLocalToken(token)) {
+      await localSaveCapture(token, payload);
+      setRefreshSignal((s) => s + 1);
+      return;
+    }
     const res = await fetch(apiUrl('/api/camera/captures'), {
       method: 'POST',
       headers: {
@@ -346,7 +403,11 @@ export default function App() {
               <div>
                 <p className="text-xs font-medium text-slate-500">
                   Signed in as {user.displayName} &middot;{' '}
-                  {wsConnected ? 'Real-time WebSocket stream connected' : 'REST sync ready'}
+                  {wsConnected
+                    ? 'Real-time WebSocket stream connected'
+                    : isLocalToken(token)
+                      ? 'On-device persistent telemetry active'
+                      : 'REST sync ready'}
                 </p>
                 <h1 className="mt-1 text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">
                   Android Hardware Sensor Matrix
