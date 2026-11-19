@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Download } from 'lucide-react';
+import { apiUrl } from '../lib/api';
 import { SENSOR_CATALOG } from '../sensors/sensorCatalog';
 import { SensorStats, StoredSensorReading } from '../types/sensor';
 
@@ -40,7 +41,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({ token, refreshSign
           range === '15m' ? 15 * 60_000 : range === '1h' ? 60 * 60_000 : 24 * 60 * 60_000;
         params.set('from', new Date(Date.now() - ms).toISOString());
       }
-      const res = await fetch(`/api/sensors/readings?${params.toString()}`, {
+      const res = await fetch(apiUrl(`/api/sensors/readings?${params.toString()}`), {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.ok) {
@@ -96,7 +97,7 @@ export const AnalyticsView: React.FC<AnalyticsViewProps> = ({ token, refreshSign
     hoverIdx !== null && chartGeometry?.coords[hoverIdx] ? chartGeometry.coords[hoverIdx] : null;
 
   const exportUrl = (format: 'csv' | 'json') =>
-    `/api/sensors/export?sensorId=${encodeURIComponent(selectedSensor)}&format=${format}&token=${encodeURIComponent(token)}`;
+    apiUrl(`/api/sensors/export?sensorId=${encodeURIComponent(selectedSensor)}&format=${format}&token=${encodeURIComponent(token)}`);
 
   return (
     <div className="space-y-6">

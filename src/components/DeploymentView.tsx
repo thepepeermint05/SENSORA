@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Check, Copy, GitBranch, Package, Smartphone } from 'lucide-react';
+import { apiUrl } from '../lib/api';
 import { DeploymentConfig } from '../types/sensor';
 import { PWAInstallButton } from './PWAInstallButton';
 
@@ -21,7 +22,7 @@ export const DeploymentView: React.FC<DeploymentViewProps> = ({ token }) => {
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch('/api/deployment/config', {
+    fetch(apiUrl('/api/deployment/config'), {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then((r) => r.json())
@@ -37,7 +38,7 @@ export const DeploymentView: React.FC<DeploymentViewProps> = ({ token }) => {
     setSaving(true);
     setSavedMsg(null);
     try {
-      const res = await fetch('/api/deployment/config', {
+      const res = await fetch(apiUrl('/api/deployment/config'), {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',

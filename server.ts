@@ -95,6 +95,22 @@ function getBaseUrl(req: Request): string {
 async function startServer() {
   const app = express();
   app.set('trust proxy', true);
+  app.use((req, res, next) => {
+    const origin = req.headers.origin;
+    if (origin) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Vary', 'Origin');
+    } else {
+      res.setHeader('Access-Control-Allow-Origin', '*');
+    }
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+    if (req.method === 'OPTIONS') {
+      res.status(204).end();
+      return;
+    }
+    next();
+  });
   app.use(express.json({ limit: '10mb' }));
 
   const server = http.createServer(app);
@@ -207,21 +223,27 @@ async function startServer() {
   // ---------------------------------------------------------------------------
   app.post('/api/auth/register', (req, res) => {
     const { username, email, password, displayName } = req.body ?? {};
-    const cleanUsername = String(username || '').trim().toLowerCase();
     const cleanEmail = String(email || '').trim().toLowerCase();
-    const cleanDisplay = String(displayName || username || '').trim();
+    const rawUsername = String(username || '').trim();
+    const normalizedHandle = rawUsername
+      .toLowerCase()
+      .replace(/\s+/g, '_')
+      .replace(/[^a-z0-9_.-]/g, '');
+    const emailFallback = cleanEmail.split('@')[0]?.replace(/[^a-z0-9_.-]/g, '') || '';
+    const cleanUsername = normalizedHandle || emailFallback;
+    const cleanDisplay = String(displayName || rawUsername || cleanUsername).trim();
     const rawPassword = String(password || '');
 
-    if (!/^[a-z0-9_.-]{3,32}$/.test(cleanUsername)) {
-      res.status(400).json({ error: 'Username must be 3–32 characters (letters, numbers, _, ., -).' });
-      return;
-    }
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+    if (!cleanEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
       res.status(400).json({ error: 'Please provide a valid email address.' });
       return;
     }
-    if (rawPassword.length < 8) {
-      res.status(400).json({ error: 'Password must be at least 8 characters long.' });
+    if (cleanUsername.length < 3 || cleanUsername.length > 32) {
+      res.status(400).json({ error: 'Username must be between 3 and 32 characters.' });
+      return;
+    }
+    if (rawPassword.length < 6) {
+      res.status(400).json({ error: 'Password must be at least 6 characters long.' });
       return;
     }
 
@@ -322,8 +344,8 @@ async function startServer() {
       res.status(400).json({ error: 'Valid email and 6-digit verification code are required.' });
       return;
     }
-    if (newPassword.length < 8) {
-      res.status(400).json({ error: 'New password must be at least 8 characters long.' });
+    if (newPassword.length < 6) {
+      res.status(400).json({ error: 'New password must be at least 6 characters long.' });
       return;
     }
 
@@ -352,7 +374,92 @@ async function startServer() {
     res.json({ ok: true, message: 'Password updated successfully. You can now sign in.' });
   });
 
-  // Google OAuth 2.0 Popup Flow
+  // Google Sign-In Token Verification -> SQLite Session Bridge
+  app.post('/api/auth/google-firebase', async (req, res) => {
+    const idToken = typeof req.body?.idToken === 'string' ? req.body.idToken.trim() : '';
+    if (!idToken) {
+      res.status(400).json({ error: 'Missing Google ID token.' });
+      return;
+    }
+
+    const configPath = path.resolve(process.cwd(), 'firebase-applet-config.json');
+    if (!fs.existsSync(configPath)) {
+      res.status(503).json({ error: 'Google Sign-In config is not available on the server.' });
+      return;
+    }
+
+    try {
+      const fbConfig = JSON.parse(fs.readFileSync(configPath, 'utf8')) as { apiKey?: string };
+      if (!fbConfig.apiKey) {
+        res.status(503).json({ error: 'Missing API key in firebase-applet-config.json.' });
+        return;
+      }
+
+      const lookupRes = await fetch(
+        `https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${encodeURIComponent(fbConfig.apiKey)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ idToken }),
+        }
+      );
+      const lookupJson = (await lookupRes.json()) as {
+        users?: Array<{
+          localId: string;
+          email?: string;
+          displayName?: string;
+          photoUrl?: string;
+        }>;
+        error?: { message?: string };
+      };
+
+      const fbUser = lookupJson.users?.[0];
+      if (!lookupRes.ok || !fbUser || !fbUser.email) {
+        res.status(401).json({
+          error: lookupJson.error?.message || 'Unable to verify Google account token.',
+        });
+        return;
+      }
+
+      const cleanEmail = fbUser.email.toLowerCase();
+      let user = db
+        .prepare('SELECT * FROM users WHERE google_sub = ? OR email = ?')
+        .get(fbUser.localId, cleanEmail) as DbUser | undefined;
+
+      if (!user) {
+        const id = crypto.randomUUID();
+        const baseUsername = cleanEmail.split('@')[0].replace(/[^a-z0-9_.-]/g, '') || 'user';
+        const uniqueUsername = `${baseUsername}_${crypto.randomBytes(2).toString('hex')}`;
+        db.prepare(
+          `INSERT INTO users (id, username, email, display_name, auth_provider, google_sub, avatar_url, created_at)
+           VALUES (?, ?, ?, ?, 'google', ?, ?, ?)`
+        ).run(
+          id,
+          uniqueUsername,
+          cleanEmail,
+          fbUser.displayName || baseUsername,
+          fbUser.localId,
+          fbUser.photoUrl || null,
+          new Date().toISOString()
+        );
+        user = db.prepare('SELECT * FROM users WHERE id = ?').get(id) as unknown as DbUser;
+      } else {
+        db.prepare(
+          'UPDATE users SET google_sub = COALESCE(google_sub, ?), avatar_url = COALESCE(avatar_url, ?) WHERE id = ?'
+        ).run(fbUser.localId, fbUser.photoUrl || null, user.id);
+        user = db.prepare('SELECT * FROM users WHERE id = ?').get(user.id) as unknown as DbUser;
+      }
+
+      const token = createSession(user.id);
+      res.json({ token, user: sanitizeUser(user) });
+    } catch (err) {
+      res.status(500).json({
+        error: err instanceof Error ? err.message : 'Failed to verify Google sign-in.',
+      });
+    }
+  });
+
+  // Google OAuth 2.0 Popup Flow (custom credentials fallback)
   app.get('/api/auth/google/status', (req, res) => {
     const configured = Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
     const callbackUrl = `${getBaseUrl(req)}/auth/google/callback`;

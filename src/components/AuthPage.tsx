@@ -1,5 +1,13 @@
-import React, { useEffect, useState } from 'react';
-import { Eye, EyeOff, KeyRound, Lock, Mail, ShieldCheck, User } from 'lucide-react';
+import React, { useState } from 'react';
+import { Eye, EyeOff, Globe, KeyRound, Lock, Mail, User } from 'lucide-react';
+import {
+  apiUrl,
+  getApiBaseUrl,
+  isCapacitorNative,
+  parseApiResponse,
+  setApiBaseUrl,
+} from '../lib/api';
+import { signInWithGooglePopup } from '../lib/firebaseAuth';
 import { AuthUser } from '../types/sensor';
 
 type AuthMode = 'login' | 'register' | 'forgot';
@@ -13,7 +21,6 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthenticated }) => {
   const [mode, setMode] = useState<AuthMode>('login');
   const [forgotStep, setForgotStep] = useState<ForgotStep>('email');
 
-  // Login / Register fields
   const [identifier, setIdentifier] = useState('');
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
@@ -21,66 +28,54 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthenticated }) => {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
 
-  // Forgot Password fields
   const [resetEmail, setResetEmail] = useState('');
   const [resetCode, setResetCode] = useState('');
   const [previewCode, setPreviewCode] = useState<string | null>(null);
   const [newPassword, setNewPassword] = useState('');
 
-  // Status & Google OAuth
   const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
-  const [googleStatus, setGoogleStatus] = useState<{ configured: boolean; callbackUrl: string } | null>(
-    null
-  );
-  const [showGoogleConfigNote, setShowGoogleConfigNote] = useState(false);
 
-  useEffect(() => {
-    fetch('/api/auth/google/status')
-      .then((r) => r.json())
-      .then((data) => setGoogleStatus(data))
-      .catch(() => {});
+  const [showServerConfig, setShowServerConfig] = useState(() => isCapacitorNative());
+  const [serverInput, setServerInput] = useState(() => getApiBaseUrl());
 
-    const onMessage = async (event: MessageEvent) => {
-      if (event.data?.type === 'GOOGLE_OAUTH_SUCCESS' && typeof event.data.token === 'string') {
-        const token = event.data.token;
-        try {
-          const res = await fetch('/api/auth/me', {
-            headers: { Authorization: `Bearer ${token}` },
-          });
-          if (res.ok) {
-            const { user } = (await res.json()) as { user: AuthUser };
-            onAuthenticated(token, user);
-          }
-        } catch {
-          setError('Failed to verify Google session.');
-        }
-      }
-    };
-
-    window.addEventListener('message', onMessage);
-    return () => window.removeEventListener('message', onMessage);
-  }, [onAuthenticated]);
+  const saveServerEndpoint = () => {
+    setApiBaseUrl(serverInput);
+    setInfo(
+      serverInput.trim()
+        ? `Backend endpoint set to ${serverInput.trim()}`
+        : 'Backend endpoint reset to default.'
+    );
+    setError(null);
+  };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    setInfo(null);
     setLoading(true);
     try {
-      const res = await fetch('/api/auth/login', {
+      const res = await fetch(apiUrl('/api/auth/login'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ identifier, password }),
       });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error || 'Sign in failed.');
+      const { data } = await parseApiResponse<{ token?: string; user?: AuthUser; error?: string }>(
+        res
+      );
+      if (!res.ok || !data?.token || !data?.user) {
+        setError(data?.error || `Sign in failed (HTTP ${res.status}).`);
         return;
       }
       onAuthenticated(data.token, data.user);
-    } catch {
-      setError('Network error while signing in.');
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? `Cannot reach server (${err.message}). Check your internet or Cloud Server URL.`
+          : 'Network error while signing in.'
+      );
     } finally {
       setLoading(false);
     }
@@ -89,21 +84,28 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthenticated }) => {
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    setInfo(null);
     setLoading(true);
     try {
-      const res = await fetch('/api/auth/register', {
+      const res = await fetch(apiUrl('/api/auth/register'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, email, displayName, password }),
       });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error || 'Registration failed.');
+      const { data } = await parseApiResponse<{ token?: string; user?: AuthUser; error?: string }>(
+        res
+      );
+      if (!res.ok || !data?.token || !data?.user) {
+        setError(data?.error || `Registration failed (HTTP ${res.status}).`);
         return;
       }
       onAuthenticated(data.token, data.user);
-    } catch {
-      setError('Network error while creating account.');
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? `Cannot reach server (${err.message}). Check your internet or Cloud Server URL.`
+          : 'Network error while creating account.'
+      );
     } finally {
       setLoading(false);
     }
@@ -115,18 +117,22 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthenticated }) => {
     setInfo(null);
     setLoading(true);
     try {
-      const res = await fetch('/api/auth/forgot-password', {
+      const res = await fetch(apiUrl('/api/auth/forgot-password'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: resetEmail }),
       });
-      const data = await res.json();
+      const { data } = await parseApiResponse<{
+        previewCode?: string;
+        message?: string;
+        error?: string;
+      }>(res);
       if (!res.ok) {
-        setError(data.error || 'Could not initiate password reset.');
+        setError(data?.error || 'Could not initiate password reset.');
         return;
       }
-      setPreviewCode(data.previewCode || null);
-      setInfo(data.message);
+      setPreviewCode(data?.previewCode || null);
+      setInfo(data?.message || 'Verification code generated.');
       setForgotStep('verify');
     } catch {
       setError('Network error while requesting recovery code.');
@@ -140,7 +146,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthenticated }) => {
     setError(null);
     setLoading(true);
     try {
-      const res = await fetch('/api/auth/reset-password', {
+      const res = await fetch(apiUrl('/api/auth/reset-password'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -149,13 +155,13 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthenticated }) => {
           newPassword,
         }),
       });
-      const data = await res.json();
+      const { data } = await parseApiResponse<{ message?: string; error?: string }>(res);
       if (!res.ok) {
-        setError(data.error || 'Password reset failed.');
+        setError(data?.error || 'Password reset failed.');
         return;
       }
       setForgotStep('done');
-      setInfo(data.message);
+      setInfo(data?.message || 'Password updated successfully.');
       setPreviewCode(null);
     } catch {
       setError('Network error while resetting password.');
@@ -166,20 +172,34 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthenticated }) => {
 
   const handleGoogleSignIn = async () => {
     setError(null);
+    setInfo(null);
+    setGoogleLoading(true);
     try {
-      const res = await fetch('/api/auth/google/url');
-      const data = await res.json();
-      if (!res.ok) {
-        setShowGoogleConfigNote(true);
-        setError(data.error || 'Google Sign-In requires OAuth client configuration.');
+      const { idToken } = await signInWithGooglePopup();
+      const res = await fetch(apiUrl('/api/auth/google-firebase'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ idToken }),
+      });
+      const { data } = await parseApiResponse<{ token?: string; user?: AuthUser; error?: string }>(
+        res
+      );
+      if (!res.ok || !data?.token || !data?.user) {
+        setError(data?.error || `Google authentication failed (HTTP ${res.status}).`);
         return;
       }
-      const popup = window.open(data.url, 'sensora_google_oauth', 'width=540,height=660');
-      if (!popup) {
-        setError('Popup was blocked by your browser. Please allow popups to sign in with Google.');
+      onAuthenticated(data.token, data.user);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes('popup-closed-by-user')) {
+        setError('Google sign-in popup was closed before completing.');
+      } else if (msg.includes('popup-blocked')) {
+        setError('Popup was blocked. Allow popups in your browser and try again.');
+      } else {
+        setError(`Google Sign-In error: ${msg}`);
       }
-    } catch {
-      setError('Unable to reach Google OAuth endpoint.');
+    } finally {
+      setGoogleLoading(false);
     }
   };
 
@@ -212,12 +232,12 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthenticated }) => {
             <div>
               <p className="text-xs font-medium text-slate-500">Hardware Matrix</p>
               <p className="mt-1 font-mono text-2xl font-semibold text-slate-900 tabular-nums">14</p>
-              <p className="mt-1 text-xs text-slate-500">Motion · GNSS · Optical · RF</p>
+              <p className="mt-1 text-xs text-slate-500">Motion &middot; GNSS &middot; Optical &middot; RF</p>
             </div>
             <div>
               <p className="text-xs font-medium text-slate-500">Storage Separation</p>
               <p className="mt-1 font-mono text-2xl font-semibold text-slate-900 tabular-nums">2-Tier</p>
-              <p className="mt-1 text-xs text-slate-500">SQLite Telemetry · Media Vault</p>
+              <p className="mt-1 text-xs text-slate-500">SQLite Telemetry &middot; Media Vault</p>
             </div>
           </div>
         </div>
@@ -376,7 +396,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthenticated }) => {
                   <div>
                     <h2 className="text-lg font-semibold text-slate-900">Create operator account</h2>
                     <p className="mt-1 text-xs text-slate-500">
-                      Passwords are salted and hashed with scrypt before persistence.
+                      Passwords are salted and hashed with scrypt before persistence in SQLite.
                     </p>
                   </div>
 
@@ -430,7 +450,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthenticated }) => {
 
                   <div>
                     <label htmlFor="reg-password" className="block text-xs font-medium text-slate-700">
-                      Password (min 8 characters)
+                      Password (min 6 characters)
                     </label>
                     <div className="relative mt-1.5">
                       <Lock className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-slate-400" />
@@ -438,10 +458,10 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthenticated }) => {
                         id="reg-password"
                         type={showPassword ? 'text' : 'password'}
                         required
-                        minLength={8}
+                        minLength={6}
                         value={password}
                         onChange={(e) => setPassword(e.target.value)}
-                        placeholder="Minimum 8 characters"
+                        placeholder="Minimum 6 characters"
                         className="min-h-[44px] w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pr-11 pl-10 text-sm text-slate-900 outline-none focus:border-sky-600 focus:bg-white"
                       />
                       <button
@@ -532,16 +552,16 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthenticated }) => {
                       </div>
                       <div>
                         <label htmlFor="reset-new-pw" className="block text-xs font-medium text-slate-700">
-                          New Password
+                          New Password (min 6 characters)
                         </label>
                         <input
                           id="reset-new-pw"
                           type="password"
                           required
-                          minLength={8}
+                          minLength={6}
                           value={newPassword}
                           onChange={(e) => setNewPassword(e.target.value)}
-                          placeholder="Minimum 8 characters"
+                          placeholder="Minimum 6 characters"
                           className="mt-1.5 min-h-[44px] w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-sm text-slate-900 outline-none focus:border-sky-600 focus:bg-white"
                         />
                       </div>
@@ -579,8 +599,9 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthenticated }) => {
 
               <button
                 type="button"
+                disabled={googleLoading}
                 onClick={handleGoogleSignIn}
-                className="flex min-h-[44px] w-full items-center justify-center gap-2.5 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 transition-colors hover:bg-slate-50"
+                className="flex min-h-[44px] w-full items-center justify-center gap-2.5 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 transition-colors hover:bg-slate-50 disabled:opacity-60"
               >
                 <svg className="h-4 w-4" viewBox="0 0 24 24" aria-hidden="true">
                   <path
@@ -600,25 +621,39 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthenticated }) => {
                     d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.7 1.29 6.62l3.99 3.14c.95-2.85 3.6-4.96 6.72-4.96z"
                   />
                 </svg>
-                Sign in with Google
+                {googleLoading ? 'Connecting with Google...' : 'Sign in with Google'}
               </button>
 
-              {showGoogleConfigNote && googleStatus && !googleStatus.configured && (
-                <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs leading-relaxed text-slate-600">
-                  <div className="flex items-center gap-1.5 font-semibold text-slate-800">
-                    <ShieldCheck className="h-3.5 w-3.5 text-sky-600" />
-                    <span>Google OAuth Setup Required</span>
+              {/* Optional Cloud Server Endpoint Toggle (helpful in Android APK builds) */}
+              <div className="mt-5 border-t border-slate-100 pt-4">
+                <button
+                  type="button"
+                  onClick={() => setShowServerConfig((s) => !s)}
+                  className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-slate-800"
+                >
+                  <Globe className="h-3.5 w-3.5" />
+                  <span>{showServerConfig ? 'Hide Cloud Server URL' : 'Cloud Server Connection'}</span>
+                </button>
+
+                {showServerConfig && (
+                  <div className="mt-2.5 flex items-center gap-2">
+                    <input
+                      type="url"
+                      value={serverInput}
+                      onChange={(e) => setServerInput(e.target.value)}
+                      placeholder="https://your-server.run.app"
+                      className="min-h-[40px] flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 font-mono text-xs text-slate-800 outline-none focus:border-sky-600 focus:bg-white"
+                    />
+                    <button
+                      type="button"
+                      onClick={saveServerEndpoint}
+                      className="min-h-[40px] rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-800 hover:bg-slate-50"
+                    >
+                      Save
+                    </button>
                   </div>
-                  <p className="mt-1">
-                    Set <code className="font-mono text-slate-800">GOOGLE_CLIENT_ID</code> and{' '}
-                    <code className="font-mono text-slate-800">GOOGLE_CLIENT_SECRET</code> in environment secrets,
-                    and register this authorized redirect URI:
-                  </p>
-                  <p className="mt-1 break-all rounded bg-white px-2 py-1 font-mono text-[11px] text-slate-800 border border-slate-200">
-                    {googleStatus.callbackUrl}
-                  </p>
-                </div>
-              )}
+                )}
+              </div>
             </div>
           </div>
         </div>

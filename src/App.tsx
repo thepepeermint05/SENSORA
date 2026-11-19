@@ -23,6 +23,7 @@ import { LiveSensorModal } from './components/LiveSensorModal';
 import { PermissionModal } from './components/PermissionModal';
 import { OfflineIndicator, PWAInstallButton } from './components/PWAInstallButton';
 import { useSensorStream } from './hooks/useSensorStream';
+import { apiUrl, safeStorage } from './lib/api';
 import { CATEGORY_LABELS, SENSOR_CATALOG } from './sensors/sensorCatalog';
 import { AuthUser, PermissionState, SensorDefinition } from './types/sensor';
 
@@ -54,7 +55,7 @@ function getSensorIcon(sensorId: string) {
 
 export default function App() {
   const [token, setToken] = useState<string | null>(() =>
-    typeof window !== 'undefined' ? window.localStorage.getItem('sensora_token') : null
+    typeof window !== 'undefined' ? safeStorage.getItem('sensora_token') : null
   );
   const [user, setUser] = useState<AuthUser | null>(null);
   const [authChecking, setAuthChecking] = useState(true);
@@ -92,7 +93,7 @@ export default function App() {
       setAuthChecking(false);
       return;
     }
-    fetch('/api/auth/me', {
+    fetch(apiUrl('/api/auth/me'), {
       headers: { Authorization: `Bearer ${token}` },
     })
       .then(async (res) => {
@@ -101,7 +102,7 @@ export default function App() {
         setUser(data.user);
       })
       .catch(() => {
-        window.localStorage.removeItem('sensora_token');
+        safeStorage.removeItem('sensora_token');
         setToken(null);
         setUser(null);
       })
@@ -112,8 +113,8 @@ export default function App() {
     if (!token) return;
     try {
       const [permRes, sumRes] = await Promise.all([
-        fetch('/api/sensors/permissions', { headers: { Authorization: `Bearer ${token}` } }),
-        fetch('/api/sensors/summary', { headers: { Authorization: `Bearer ${token}` } }),
+        fetch(apiUrl('/api/sensors/permissions'), { headers: { Authorization: `Bearer ${token}` } }),
+        fetch(apiUrl('/api/sensors/summary'), { headers: { Authorization: `Bearer ${token}` } }),
       ]);
       if (permRes.ok) {
         const permData = (await permRes.json()) as {
@@ -149,7 +150,7 @@ export default function App() {
   }, [user, loadWorkspaceData, savedCount, refreshSignal]);
 
   const handleAuthenticated = useCallback((newToken: string, authUser: AuthUser) => {
-    window.localStorage.setItem('sensora_token', newToken);
+    safeStorage.setItem('sensora_token', newToken);
     setToken(newToken);
     setUser(authUser);
   }, []);
@@ -157,12 +158,12 @@ export default function App() {
   const handleLogout = async () => {
     stopActiveSensor();
     if (token) {
-      await fetch('/api/auth/logout', {
+      await fetch(apiUrl('/api/auth/logout'), {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
       }).catch(() => {});
     }
-    window.localStorage.removeItem('sensora_token');
+    safeStorage.removeItem('sensora_token');
     setToken(null);
     setUser(null);
   };
@@ -184,7 +185,7 @@ export default function App() {
     const result = await requestHardwarePermission(sensor.id);
 
     setPermissions((prev) => ({ ...prev, [sensor.id]: result }));
-    await fetch(`/api/sensors/permissions/${sensor.id}`, {
+    await fetch(apiUrl(`/api/sensors/permissions/${sensor.id}`), {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
@@ -204,7 +205,7 @@ export default function App() {
     if (!pendingPermissionSensor || !token) return;
     const sensor = pendingPermissionSensor;
     setPermissions((prev) => ({ ...prev, [sensor.id]: 'denied' }));
-    await fetch(`/api/sensors/permissions/${sensor.id}`, {
+    await fetch(apiUrl(`/api/sensors/permissions/${sensor.id}`), {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
@@ -225,7 +226,7 @@ export default function App() {
     fpsEstimate: number;
   }) => {
     if (!token) return;
-    const res = await fetch('/api/camera/captures', {
+    const res = await fetch(apiUrl('/api/camera/captures'), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

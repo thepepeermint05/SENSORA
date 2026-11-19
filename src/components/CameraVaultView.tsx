@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Camera, Download, Trash2 } from 'lucide-react';
+import { apiUrl } from '../lib/api';
 import { CameraCaptureRecord } from '../types/sensor';
 
 interface CameraVaultViewProps {
@@ -19,7 +20,7 @@ export const CameraVaultView: React.FC<CameraVaultViewProps> = ({
   const loadCaptures = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/camera/captures', {
+      const res = await fetch(apiUrl('/api/camera/captures'), {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (res.ok) {
@@ -36,7 +37,7 @@ export const CameraVaultView: React.FC<CameraVaultViewProps> = ({
   }, [loadCaptures, refreshSignal]);
 
   const handleDelete = async (id: string) => {
-    const res = await fetch(`/api/camera/captures/${id}`, {
+    const res = await fetch(apiUrl(`/api/camera/captures/${id}`), {
       method: 'DELETE',
       headers: { Authorization: `Bearer ${token}` },
     });
@@ -105,7 +106,7 @@ export const CameraVaultView: React.FC<CameraVaultViewProps> = ({
       ) : (
         <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
           {captures.map((cap) => {
-            const imgUrl = `/api/camera/files/${cap.id}?token=${encodeURIComponent(token)}`;
+            const imgUrl = apiUrl(`/api/camera/files/${cap.id}?token=${encodeURIComponent(token)}`);
             return (
               <article
                 key={cap.id}

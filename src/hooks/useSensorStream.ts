@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { apiUrl, wsUrl } from '../lib/api';
 import { LiveSensorSample, PermissionState } from '../types/sensor';
 
 interface WindowWithSensors extends Window {
@@ -75,8 +76,7 @@ export function useSensorStream(token: string | null) {
 
     const connect = () => {
       if (closed) return;
-      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const ws = new WebSocket(`${proto}//${window.location.host}/ws/telemetry?token=${encodeURIComponent(token)}`);
+      const ws = new WebSocket(wsUrl(`/ws/telemetry?token=${encodeURIComponent(token)}`));
       wsRef.current = ws;
 
       ws.onopen = () => {
@@ -84,7 +84,7 @@ export function useSensorStream(token: string | null) {
         // Flush queued offline readings
         if (pendingQueueRef.current.length > 0) {
           const batch = pendingQueueRef.current.splice(0, 50);
-          fetch('/api/sensors/readings', {
+          fetch(apiUrl('/api/sensors/readings'), {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -149,7 +149,7 @@ export function useSensorStream(token: string | null) {
       }
 
       try {
-        const res = await fetch('/api/sensors/readings', {
+        const res = await fetch(apiUrl('/api/sensors/readings'), {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
