@@ -31,10 +31,16 @@ export const safeStorage = {
 
 export function isCapacitorNative(): boolean {
   if (typeof window === 'undefined') return false;
+  const cap = (window as unknown as { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor;
+  if (cap?.isNativePlatform?.()) return true;
   const proto = window.location.protocol;
   const host = window.location.hostname;
   const port = window.location.port;
-  return proto === 'capacitor:' || proto === 'file:' || (host === 'localhost' && !port);
+  return (
+    proto === 'capacitor:' ||
+    proto === 'file:' ||
+    (host === 'localhost' && (!port || port === '80' || port === '443'))
+  );
 }
 
 export function getApiBaseUrl(): string {

@@ -217,8 +217,8 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthenticated }) => {
 
     if (isNative) {
       setShowWebFallbackLink(true);
-      setError(
-        'Google OAuth popups cannot run inside an Android APK WebView (auth/unauthorized-domain). Create or sign in with your email and password above on the APK, or open Sensora in Chrome for Google Sign-In.'
+      setInfo(
+        'Google Sign-In popups are blocked by Android WebViews on localhost. Please use Create Account or Sign In above inside the APK (stored securely on your device), or open Sensora in Chrome.'
       );
       return;
     }
@@ -383,9 +383,32 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthenticated }) => {
               {info && (
                 <div
                   role="status"
-                  className="mb-5 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-xs font-medium text-sky-900"
+                  className="mb-5 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-xs leading-relaxed font-medium text-sky-900"
                 >
-                  {info}
+                  <p>{info}</p>
+                  {showWebFallbackLink && (
+                    <div className="mt-2 flex flex-wrap items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMode('register');
+                          setShowWebFallbackLink(false);
+                        }}
+                        className="font-semibold text-sky-700 underline"
+                      >
+                        Create On-Device Account
+                      </button>
+                      <a
+                        href={WEB_APP_URL}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 font-semibold text-sky-700 underline"
+                      >
+                        <span>Open Web App</span>
+                        <ExternalLink className="h-3.5 w-3.5" />
+                      </a>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -701,6 +724,13 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthenticated }) => {
                 </svg>
                 {googleLoading ? 'Connecting with Google...' : 'Sign in with Google'}
               </button>
+
+              {isNative && (
+                <p className="mt-2 text-center text-[11px] text-slate-500">
+                  On Android APK, use <strong>Create Account</strong> or <strong>Sign In</strong>{' '}
+                  above. Google Sign-In works in the web browser.
+                </p>
+              )}
 
               {isNative && (
                 <div className="mt-5 border-t border-slate-100 pt-4">

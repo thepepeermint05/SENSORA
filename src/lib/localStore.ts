@@ -37,8 +37,27 @@ interface LocalCaptureRecord extends CameraCaptureRecord {
   imageBase64: string;
 }
 
+function safeUuid(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  const bytes = new Uint8Array(16);
+  if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+    crypto.getRandomValues(bytes);
+  } else {
+    for (let i = 0; i < 16; i++) bytes[i] = Math.floor(Math.random() * 256);
+  }
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes).map((b) => b.toString(16).padStart(2, '0'));
+  return `${hex.slice(0, 4).join('')}-${hex.slice(4, 6).join('')}-${hex.slice(6, 8).join('')}-${hex.slice(8, 10).join('')}-${hex.slice(10, 16).join('')}`;
+}
+
+let dbPromise: Promise<IDBDatabase> | null = null;
+
 function openDb(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
+  if (dbPromise) return dbPromise;
+  dbPromise = new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
     req.onupgradeneeded = () => {
       const db = req.result;
@@ -71,9 +90,19 @@ function openDb(): Promise<IDBDatabase> {
         db.createObjectStore('deployment', { keyPath: 'userId' });
       }
     };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
+    req.onsuccess = () => {
+      const db = req.result;
+      db.onclose = () => {
+        dbPromise = null;
+      };
+      resolve(db);
+    };
+    req.onerror = () => {
+      dbPromise = null;
+      reject(req.error);
+    };
   });
+  return dbPromise;
 }
 
 function txPromise<T>(
@@ -104,19 +133,23 @@ async function hashPasswordWeb(password: string): Promise<string> {
     .map((b) => b.toString(16).padStart(2, '0'))
     .join('');
 
-  if (crypto.subtle) {
-    const key = await crypto.subtle.importKey('raw', bytes, 'PBKDF2', false, ['deriveBits']);
-    const bits = await crypto.subtle.deriveBits(
-      { name: 'PBKDF2', salt: saltBytes, iterations: 10000, hash: 'SHA-256' },
-      key,
-      256
-    );
-    const hashHex = Array.from(new Uint8Array(bits))
-      .map((b) => b.toString(16).padStart(2, '0'))
-      .join('');
-    return `pbkdf2:${saltHex}:${hashHex}`;
+  try {
+    if (crypto.subtle) {
+      const key = await crypto.subtle.importKey('raw', bytes, 'PBKDF2', false, ['deriveBits']);
+      const bits = await crypto.subtle.deriveBits(
+        { name: 'PBKDF2', salt: saltBytes, iterations: 10000, hash: 'SHA-256' },
+        key,
+        256
+      );
+      const hashHex = Array.from(new Uint8Array(bits))
+        .map((b) => b.toString(16).padStart(2, '0'))
+        .join('');
+      return `pbkdf2:${saltHex}:${hashHex}`;
+    }
+  } catch {
+    // Fallback when subtle crypto is unavailable in WebView
   }
-  return `plain:${saltHex}:${btoa(password)}`;
+  return `plain:${saltHex}:${btoa(unescape(encodeURIComponent(password)))}`;
 }
 
 async function verifyPasswordWeb(password: string, stored: string): Promise<boolean> {
@@ -124,22 +157,26 @@ async function verifyPasswordWeb(password: string, stored: string): Promise<bool
   if (parts.length !== 3) return false;
   const [scheme, saltHex, expected] = parts;
   if (scheme === 'plain') {
-    return btoa(password) === expected;
+    return btoa(unescape(encodeURIComponent(password))) === expected || btoa(password) === expected;
   }
-  const saltBytes = new Uint8Array(
-    saltHex.match(/.{1,2}/g)?.map((byte) => parseInt(byte, 16)) || []
-  );
-  const bytes = new TextEncoder().encode(password);
-  const key = await crypto.subtle.importKey('raw', bytes, 'PBKDF2', false, ['deriveBits']);
-  const bits = await crypto.subtle.deriveBits(
-    { name: 'PBKDF2', salt: saltBytes, iterations: 10000, hash: 'SHA-256' },
-    key,
-    256
-  );
-  const actual = Array.from(new Uint8Array(bits))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-  return actual === expected;
+  try {
+    const saltBytes = new Uint8Array(
+      saltHex.match(/.{1,2}/g)?.map((byte) => parseInt(byte, 16)) || []
+    );
+    const bytes = new TextEncoder().encode(password);
+    const key = await crypto.subtle.importKey('raw', bytes, 'PBKDF2', false, ['deriveBits']);
+    const bits = await crypto.subtle.deriveBits(
+      { name: 'PBKDF2', salt: saltBytes, iterations: 10000, hash: 'SHA-256' },
+      key,
+      256
+    );
+    const actual = Array.from(new Uint8Array(bits))
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('');
+    return actual === expected;
+  } catch {
+    return false;
+  }
 }
 
 function randomToken(): string {
@@ -208,7 +245,7 @@ export async function localRegister(body: {
   }
 
   const user: LocalUserRecord = {
-    id: crypto.randomUUID(),
+    id: safeUuid(),
     username: cleanUsername,
     email: cleanEmail,
     displayName: cleanDisplay || cleanUsername,
@@ -267,7 +304,7 @@ export async function localForgotPassword(email: string): Promise<{
   }
   const code = String(100000 + Math.floor(Math.random() * 900000));
   const reset: LocalResetRecord = {
-    id: crypto.randomUUID(),
+    id: safeUuid(),
     email: cleanEmail,
     code,
     expiresAt: new Date(Date.now() + 15 * 60_000).toISOString(),
@@ -439,7 +476,7 @@ export async function localSaveCapture(
   }
 ): Promise<CameraCaptureRecord> {
   const user = await requireLocalUser(token);
-  const id = crypto.randomUUID();
+  const id = safeUuid();
   const approxBytes = Math.round((payload.imageBase64.length * 3) / 4);
   const record: LocalCaptureRecord = {
     id,

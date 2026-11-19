@@ -439,6 +439,15 @@ export function useSensorStream(token: string | null) {
         if (w.Accelerometer) {
           try {
             sensorObj = new w.Accelerometer({ frequency: 10 });
+            sensorObj.addEventListener('error', () => {
+              try {
+                sensorObj?.stop();
+              } catch {
+                // ignore
+              }
+              sensorObj = null;
+              window.addEventListener('devicemotion', handleMotion);
+            });
             sensorObj.addEventListener('reading', () => {
               receivedData = true;
               const x = Number((sensorObj?.x ?? 0).toFixed(3));
@@ -545,7 +554,11 @@ export function useSensorStream(token: string | null) {
 
         cleanupRef.current = () => {
           window.clearTimeout(checkTimer);
-          sensorObj?.stop();
+          try {
+            sensorObj?.stop();
+          } catch {
+            // ignore
+          }
           window.removeEventListener('devicemotion', handleMotion);
         };
         return;
@@ -559,6 +572,15 @@ export function useSensorStream(token: string | null) {
         if (w.Gyroscope) {
           try {
             gyroObj = new w.Gyroscope({ frequency: 10 });
+            gyroObj.addEventListener('error', () => {
+              try {
+                gyroObj?.stop();
+              } catch {
+                // ignore
+              }
+              gyroObj = null;
+              window.addEventListener('devicemotion', handleMotion);
+            });
             gyroObj.addEventListener('reading', () => {
               received = true;
               const x = Number((((gyroObj?.x ?? 0) * 180) / Math.PI).toFixed(2));
@@ -615,7 +637,11 @@ export function useSensorStream(token: string | null) {
 
         cleanupRef.current = () => {
           window.clearTimeout(timer);
-          gyroObj?.stop();
+          try {
+            gyroObj?.stop();
+          } catch {
+            // ignore
+          }
           window.removeEventListener('devicemotion', handleMotion);
         };
         return;
@@ -629,6 +655,15 @@ export function useSensorStream(token: string | null) {
         if (sensorId === 'magnetometer' && w.Magnetometer) {
           try {
             magSensor = new w.Magnetometer({ frequency: 5 });
+            magSensor.addEventListener('error', () => {
+              try {
+                magSensor?.stop();
+              } catch {
+                // ignore
+              }
+              magSensor = null;
+              window.addEventListener('deviceorientation', handleOrient);
+            });
             magSensor.addEventListener('reading', () => {
               received = true;
               const x = Number((magSensor?.x ?? 0).toFixed(2));
@@ -696,7 +731,11 @@ export function useSensorStream(token: string | null) {
 
         cleanupRef.current = () => {
           window.clearTimeout(timer);
-          magSensor?.stop();
+          try {
+            magSensor?.stop();
+          } catch {
+            // ignore
+          }
           window.removeEventListener('deviceorientation', handleOrient);
         };
         return;
@@ -729,7 +768,21 @@ export function useSensorStream(token: string | null) {
 
         try {
           const instance = new Ctor({ frequency: 2 });
+          let received = false;
+          instance.addEventListener('error', () => {
+            pushSample({
+              sensorId,
+              primaryValue: null,
+              unit,
+              metrics: {},
+              recordedAt: new Date().toISOString(),
+              hardwareStatus: 'unavailable',
+              statusNote:
+                'Hardware sensor permission or W3C Generic Sensor API was blocked by this WebView/browser.',
+            });
+          });
           instance.addEventListener('reading', () => {
+            received = true;
             const val =
               sensorId === 'ambient_light'
                 ? instance.illuminance ?? 0
@@ -754,7 +807,27 @@ export function useSensorStream(token: string | null) {
             });
           });
           instance.start();
-          cleanupRef.current = () => instance.stop();
+          const timer = window.setTimeout(() => {
+            if (!received) {
+              pushSample({
+                sensorId,
+                primaryValue: null,
+                unit,
+                metrics: {},
+                recordedAt: new Date().toISOString(),
+                hardwareStatus: 'unavailable',
+                statusNote: 'No hardware events received from this sensor on the current host.',
+              });
+            }
+          }, 2200);
+          cleanupRef.current = () => {
+            window.clearTimeout(timer);
+            try {
+              instance.stop();
+            } catch {
+              // ignore
+            }
+          };
         } catch (err) {
           pushSample({
             sensorId,
