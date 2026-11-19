@@ -232,8 +232,8 @@ export async function localRegister(body: {
   if (!cleanEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
     throw new Error('Please provide a valid email address.');
   }
-  if (cleanUsername.length < 3 || cleanUsername.length > 32) {
-    throw new Error('Username must be between 3 and 32 characters.');
+  if (cleanUsername.length < 2 || cleanUsername.length > 32) {
+    throw new Error('Username must be between 2 and 32 characters.');
   }
   if (password.length < 6) {
     throw new Error('Password must be at least 6 characters long.');
@@ -279,6 +279,33 @@ export async function localLogin(body: {
   const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24 * 30).toISOString();
   await txPromise('sessions', 'readwrite', (s) =>
     s.put({ token, userId: user.id, expiresAt } satisfies LocalSessionRecord)
+  );
+  return { token, user: sanitizeLocalUser(user) };
+}
+
+export async function localQuickDeviceSession(): Promise<{
+  token: string;
+  user: AuthUser;
+}> {
+  const users = await getAllFromStore<LocalUserRecord>('users');
+  let user = users.find((u) => u.username === 'device_operator');
+  if (!user) {
+    user = {
+      id: safeUuid(),
+      username: 'device_operator',
+      email: 'operator@device.local',
+      displayName: 'Device Operator',
+      authProvider: 'device-quick',
+      avatarUrl: null,
+      createdAt: new Date().toISOString(),
+      passwordHash: '',
+    };
+    await txPromise('users', 'readwrite', (s) => s.put(user!));
+  }
+  const token = `local_${randomToken()}`;
+  const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24 * 30).toISOString();
+  await txPromise('sessions', 'readwrite', (s) =>
+    s.put({ token, userId: user!.id, expiresAt } satisfies LocalSessionRecord)
   );
   return { token, user: sanitizeLocalUser(user) };
 }

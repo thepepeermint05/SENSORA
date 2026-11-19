@@ -1,17 +1,16 @@
 import React, { useState } from 'react';
-import { ExternalLink, Eye, EyeOff, Globe, KeyRound, Lock, Mail, User } from 'lucide-react';
+import { Eye, EyeOff, KeyRound, Lock, Mail, Smartphone, User } from 'lucide-react';
 import {
   apiUrl,
-  getApiBaseUrl,
   isCapacitorNative,
   isRemoteServerAvailable,
   parseApiResponse,
-  setApiBaseUrl,
 } from '../lib/api';
 import { signInWithGooglePopup } from '../lib/firebaseAuth';
 import {
   localForgotPassword,
   localLogin,
+  localQuickDeviceSession,
   localRegister,
   localResetPassword,
 } from '../lib/localStore';
@@ -23,9 +22,6 @@ type ForgotStep = 'email' | 'verify' | 'done';
 interface AuthPageProps {
   onAuthenticated: (token: string, user: AuthUser) => void;
 }
-
-const WEB_APP_URL =
-  'https://ais-dev-rogbxvrumm6szdnkiely6c-95350709883.asia-northeast1.run.app';
 
 export const AuthPage: React.FC<AuthPageProps> = ({ onAuthenticated }) => {
   const [mode, setMode] = useState<AuthMode>('login');
@@ -47,20 +43,21 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthenticated }) => {
   const [googleLoading, setGoogleLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
-  const [showWebFallbackLink, setShowWebFallbackLink] = useState(false);
 
   const isNative = isCapacitorNative();
-  const [showServerConfig, setShowServerConfig] = useState(false);
-  const [serverInput, setServerInput] = useState(() => getApiBaseUrl());
 
-  const saveServerEndpoint = () => {
-    setApiBaseUrl(serverInput);
-    setInfo(
-      serverInput.trim()
-        ? `Cloud Server set to ${serverInput.trim()}`
-        : 'Using standalone on-device storage.'
-    );
+  const handleQuickDeviceSignIn = async () => {
     setError(null);
+    setInfo(null);
+    setLoading(true);
+    try {
+      const res = await localQuickDeviceSession();
+      onAuthenticated(res.token, res.user);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to start device session.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -213,16 +210,6 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthenticated }) => {
   const handleGoogleSignIn = async () => {
     setError(null);
     setInfo(null);
-    setShowWebFallbackLink(false);
-
-    if (isNative) {
-      setShowWebFallbackLink(true);
-      setInfo(
-        'Google Sign-In popups are blocked by Android WebViews on localhost. Please use Create Account or Sign In above inside the APK (stored securely on your device), or open Sensora in Chrome.'
-      );
-      return;
-    }
-
     setGoogleLoading(true);
     try {
       const { idToken } = await signInWithGooglePopup();
@@ -242,9 +229,8 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthenticated }) => {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes('auth/unauthorized-domain')) {
-        setShowWebFallbackLink(true);
         setError(
-          `Domain "${window.location.hostname}" is not authorized for Google Sign-In popups. Use Email & Password above or open the authorized web URL in Chrome.`
+          `Domain "${window.location.hostname}" is not authorized for Google Sign-In popups. Please sign in with Email & Password above.`
         );
       } else if (msg.includes('popup-closed-by-user')) {
         setError('Google sign-in popup was closed before completing.');
@@ -366,17 +352,6 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthenticated }) => {
                   className="mb-5 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs leading-relaxed font-medium text-rose-800"
                 >
                   <p>{error}</p>
-                  {showWebFallbackLink && (
-                    <a
-                      href={WEB_APP_URL}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="mt-2 inline-flex items-center gap-1.5 font-semibold text-sky-700 underline"
-                    >
-                      <span>Open Web App in Chrome</span>
-                      <ExternalLink className="h-3.5 w-3.5" />
-                    </a>
-                  )}
                 </div>
               )}
 
@@ -386,29 +361,6 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthenticated }) => {
                   className="mb-5 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-xs leading-relaxed font-medium text-sky-900"
                 >
                   <p>{info}</p>
-                  {showWebFallbackLink && (
-                    <div className="mt-2 flex flex-wrap items-center gap-3">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setMode('register');
-                          setShowWebFallbackLink(false);
-                        }}
-                        className="font-semibold text-sky-700 underline"
-                      >
-                        Create On-Device Account
-                      </button>
-                      <a
-                        href={WEB_APP_URL}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1 font-semibold text-sky-700 underline"
-                      >
-                        <span>Open Web App</span>
-                        <ExternalLink className="h-3.5 w-3.5" />
-                      </a>
-                    </div>
-                  )}
                 </div>
               )}
 
@@ -691,87 +643,56 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onAuthenticated }) => {
                 </div>
               )}
 
-              {/* Divider + Google Sign-In */}
+              {/* Divider + Secondary Access */}
               <div className="my-6 flex items-center gap-3">
                 <div className="h-px flex-1 bg-slate-200" />
                 <span className="text-xs text-slate-400">or continue with</span>
                 <div className="h-px flex-1 bg-slate-200" />
               </div>
 
-              <button
-                type="button"
-                disabled={googleLoading}
-                onClick={handleGoogleSignIn}
-                className="flex min-h-[44px] w-full items-center justify-center gap-2.5 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 transition-colors hover:bg-slate-50 disabled:opacity-60"
-              >
-                <svg className="h-4 w-4" viewBox="0 0 24 24" aria-hidden="true">
-                  <path
-                    fill="#4285F4"
-                    d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17z"
-                  />
-                  <path
-                    fill="#34A853"
-                    d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.11-6.72-4.96H1.29v3.14C3.26 21.3 7.31 24 12 24z"
-                  />
-                  <path
-                    fill="#FBBC05"
-                    d="M5.28 14.24c-.24-.72-.38-1.49-.38-2.24s.14-1.52.38-2.24V6.62H1.29C.47 8.24 0 10.06 0 12s.47 3.76 1.29 5.38l3.99-3.14z"
-                  />
-                  <path
-                    fill="#EA4335"
-                    d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.7 1.29 6.62l3.99 3.14c.95-2.85 3.6-4.96 6.72-4.96z"
-                  />
-                </svg>
-                {googleLoading ? 'Connecting with Google...' : 'Sign in with Google'}
-              </button>
-
-              {isNative && (
-                <p className="mt-2 text-center text-[11px] text-slate-500">
-                  On Android APK, use <strong>Create Account</strong> or <strong>Sign In</strong>{' '}
-                  above. Google Sign-In works in the web browser.
-                </p>
-              )}
-
-              {isNative && (
-                <div className="mt-5 border-t border-slate-100 pt-4">
+              {isNative ? (
+                <div className="space-y-2.5">
                   <button
                     type="button"
-                    onClick={() => setShowServerConfig((s) => !s)}
-                    className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-slate-800"
+                    disabled={loading}
+                    onClick={handleQuickDeviceSignIn}
+                    className="flex min-h-[44px] w-full items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 transition-colors hover:bg-slate-50 disabled:opacity-60"
                   >
-                    <Globe className="h-3.5 w-3.5" />
-                    <span>
-                      {showServerConfig
-                        ? 'Hide Optional Cloud Server URL'
-                        : 'Optional: Connect Remote Cloud Server'}
-                    </span>
+                    <Smartphone className="h-4 w-4 text-sky-600" />
+                    Continue on This Device (1-Tap)
                   </button>
-
-                  {showServerConfig && (
-                    <div className="mt-2.5 space-y-2">
-                      <p className="text-[11px] text-slate-500">
-                        Leave blank to store accounts and sensor telemetry directly on your device
-                        (IndexedDB), or enter your deployed server URL.
-                      </p>
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="url"
-                          value={serverInput}
-                          onChange={(e) => setServerInput(e.target.value)}
-                          placeholder="https://your-sensora-server.run.app"
-                          className="min-h-[40px] flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 font-mono text-xs text-slate-800 outline-none focus:border-sky-600 focus:bg-white"
-                        />
-                        <button
-                          type="button"
-                          onClick={saveServerEndpoint}
-                          className="min-h-[40px] rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-800 hover:bg-slate-50"
-                        >
-                          Save
-                        </button>
-                      </div>
-                    </div>
-                  )}
+                  <p className="text-center text-[11px] text-slate-500">
+                    Google Sign-In runs in Chrome/Web; Android APK uses local device accounts or
+                    1-tap access.
+                  </p>
                 </div>
+              ) : (
+                <button
+                  type="button"
+                  disabled={googleLoading}
+                  onClick={handleGoogleSignIn}
+                  className="flex min-h-[44px] w-full items-center justify-center gap-2.5 rounded-xl border border-slate-300 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 transition-colors hover:bg-slate-50 disabled:opacity-60"
+                >
+                  <svg className="h-4 w-4" viewBox="0 0 24 24" aria-hidden="true">
+                    <path
+                      fill="#4285F4"
+                      d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17z"
+                    />
+                    <path
+                      fill="#34A853"
+                      d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.11-6.72-4.96H1.29v3.14C3.26 21.3 7.31 24 12 24z"
+                    />
+                    <path
+                      fill="#FBBC05"
+                      d="M5.28 14.24c-.24-.72-.38-1.49-.38-2.24s.14-1.52.38-2.24V6.62H1.29C.47 8.24 0 10.06 0 12s.47 3.76 1.29 5.38l3.99-3.14z"
+                    />
+                    <path
+                      fill="#EA4335"
+                      d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.7 1.29 6.62l3.99 3.14c.95-2.85 3.6-4.96 6.72-4.96z"
+                    />
+                  </svg>
+                  {googleLoading ? 'Connecting with Google...' : 'Sign in with Google'}
+                </button>
               )}
             </div>
           </div>
