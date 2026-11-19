@@ -118,7 +118,7 @@ git push -u origin ${config.branch || 'main'}`;
               <span>Included Native Android Artifacts</span>
             </div>
             <ul className="mt-3 space-y-2 font-mono text-xs text-slate-600">
-              <li>capacitor.config.ts ({config.packageId})</li>
+              <li>capacitor.config.json ({config.packageId})</li>
               <li>android-native/AndroidManifest.permissions.xml</li>
               <li>.github/workflows/android-apk.yml</li>
             </ul>

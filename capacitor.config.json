@@ -1,0 +1,16 @@
+{
+  "appId": "com.sensora.telemetry",
+  "appName": "Sensora",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https",
+    "cleartext": false
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 1500,
+      "backgroundColor": "#0F172A",
+      "showSpinner": false
+    }
+  }
+}
