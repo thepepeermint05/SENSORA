@@ -1,0 +1,6 @@
+{
+  "name": "Sensora",
+  "description": "Android sensor telemetry suite with permission-gated live hardware readings, separate camera optical vault, real-time cloud SQLite sync, historical analytics, and Capacitor APK + GitHub Actions pipeline.",
+  "requestFramePermissions": ["camera", "microphone", "geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
