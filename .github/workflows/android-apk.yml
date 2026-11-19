@@ -47,11 +47,7 @@ jobs:
 
       - name: Install dependencies & build web bundle
         run: |
-          if [ -f package-lock.json ]; then
-            npm ci
-          else
-            npm install --legacy-peer-deps
-          fi
+          npm install --legacy-peer-deps
           npm run build
 
       - name: Install Capacitor & scaffold Android project
